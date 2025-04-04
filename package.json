@@ -1,0 +1,32 @@
+{
+  "name": "clean-box",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "dev": "nodemon --watch 'backend/**/*.ts' --exec tsx backend/src/server.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MatteoGuidii/clean-box.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/MatteoGuidii/clean-box/issues"
+  },
+  "homepage": "https://github.com/MatteoGuidii/clean-box#readme",
+  "description": "",
+  "devDependencies": {
+    "nodemon": "^3.1.9",
+    "tsx": "^3.12.7",
+    "typescript": "^5.8.2"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.5.0",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.2"
+  }
+}
