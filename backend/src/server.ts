@@ -1,13 +1,19 @@
 import Fastify from 'fastify';
-import dotenv from 'dotenv';
+import cors from '@fastify/cors';
+import userRoutes from './routes/user';
 
-dotenv.config();
 const app = Fastify();
 
-app.get('/', async (req, res) => {
-  return { status: 'Backend is running 🚀' };
-});
+app.register(cors, { origin: true });
+app.register(userRoutes, { prefix: '/api/v1/users' });
 
-app.listen({ port: 3000 }, () => {
-  console.log('Server running on http://localhost:3000');
-});
+const start = async () => {
+  try {
+		await app.listen({ port: 3000 });
+		console.log('🚀 Server running on http://localhost:3000');
+	} catch (err) {
+		app.log.error(err);
+		process.exit(1);
+	}
+};
+start();

@@ -3,8 +3,10 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon --watch 'backend/**/*.ts' --exec tsx backend/src/server.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "nodemon --watch backend/src --ext ts,tsx --exec \"tsx backend/src/server.ts\"",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint backend/src/**/*.{ts,tsx,js} --fix",
+    "format": "prettier --write 'backend/src/**/*.{ts,tsx,js,json,md}'"
   },
   "repository": {
     "type": "git",
@@ -20,12 +22,22 @@
   "homepage": "https://github.com/MatteoGuidii/clean-box#readme",
   "description": "",
   "devDependencies": {
+    "@types/bcrypt": "^5.0.2",
+    "@types/node": "^22.14.0",
+    "@typescript-eslint/eslint-plugin": "^8.29.0",
+    "@typescript-eslint/parser": "^8.29.0",
+    "eslint": "^9.24.0",
+    "eslint-config-prettier": "^10.1.1",
+    "eslint-plugin-prettier": "^5.2.6",
     "nodemon": "^3.1.9",
+    "prettier": "^3.5.3",
     "tsx": "^3.12.7",
     "typescript": "^5.8.2"
   },
   "dependencies": {
+    "@fastify/cors": "^11.0.1",
     "@prisma/client": "^6.5.0",
+    "bcrypt": "^5.1.1",
     "dotenv": "^16.4.7",
     "fastify": "^5.2.2"
   }
