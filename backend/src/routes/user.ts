@@ -1,8 +1,10 @@
 import { FastifyInstance } from 'fastify';
-import { signup, login, logout } from '../controllers/userController';
+import { signup, login, logout, getMe } from '../controllers/userController';
+import { asyncHandler } from '../utils/asyncHandler';
 
 export default async function userRoutes(app: FastifyInstance) {
-	app.post('/signup', signup);
-	app.post('/login', login);
-	app.post('/logout', logout);
+  app.post('/signup', asyncHandler(signup));
+  app.post('/login', asyncHandler(login));
+  app.post('/logout', asyncHandler(logout));
+  app.get('/me', { preHandler: [app.authenticate] }, asyncHandler(getMe));
 }
