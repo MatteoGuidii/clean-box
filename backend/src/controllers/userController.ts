@@ -1,4 +1,5 @@
-import { FastifyReply, FastifyRequest } from 'fastify';
+import { FastifyRequest, FastifyReply } from 'fastify';
+import prisma from '../db/prisma';
 
 export async function signup(req: FastifyRequest, reply: FastifyReply) {
 	// In real life you'd create the user here
