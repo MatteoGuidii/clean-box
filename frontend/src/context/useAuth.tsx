@@ -1,9 +1,9 @@
 import { useContext } from 'react';
-import { AuthContext, AuthContextType } from './AuthContext'; // Import context object and type
+import { AuthContext, AuthContextType } from './AuthContextDefinition';
 
-// --- Custom hook to use the AuthContext ---
+// --- Custom hook to use the AuthContext --- (Implementation remains the same)
 export const useAuth = (): AuthContextType => {
-  // Get the context value
+  // Get the context value using the imported context object
   const context = useContext(AuthContext);
   // Ensure the hook is used within a provider
   if (context === undefined) {
