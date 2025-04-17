@@ -3,9 +3,9 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import Home from './pages/Home';
 import SignUp from './pages/Signup';
 import Login from './pages/Login';
+import Dashboard from './pages/Dashboard'; // --- IMPORT DASHBOARD ---
 import { useAuth } from './context/useAuth';
-import Navbar from './components/layout/Navbar'; // --- IMPORT THE NAVBAR ---
-// Optional: LoadingSpinner, Toaster etc.
+import Navbar from './components/layout/Navbar';
 
 function App() {
   const { user, isLoading } = useAuth();
@@ -20,24 +20,41 @@ function App() {
   }
 
   return (
-    // Use a fragment or main div to wrap Navbar and Routes
     <>
-      {/* --- RENDER THE NAVBAR HERE --- */}
       <Navbar />
-
-      {/* To prevent content from going under the sticky navbar, you might need
-          a main content container with padding-top, or adjust layout globally */}
-      <main /* className="pt-16" */> {/* Example: Add top padding if navbar is sticky */}
+      <main> {/* Optional wrapper */}
         <Routes>
-          {/* Routes remain the same */}
+          {/* Public Route: Home */}
           <Route path="/" element={<Home />} />
-          <Route path="/login" element={user ? <Navigate to="/" replace /> : <Login />} />
-          <Route path="/signup" element={user ? <Navigate to="/" replace /> : <SignUp />} />
-          {/* No protected routes yet */}
-          <Route path="*" element={<Navigate to="/" replace />} />
+
+          {/* Public Route: Login - Redirect to Dashboard if logged in */}
+          <Route
+            path="/login"
+            element={user ? <Navigate to="/dashboard" replace /> : <Login />} // <-- UPDATED Redirect Target
+          />
+
+          {/* Public Route: Signup - Redirect to Dashboard if logged in */}
+          <Route
+            path="/signup"
+            element={user ? <Navigate to="/dashboard" replace /> : <SignUp />} // <-- UPDATED Redirect Target
+          />
+
+          {/* Protected Route: Dashboard */}
+          <Route
+            path="/dashboard" // <-- ADDED Route
+            // Render Dashboard if logged in, otherwise redirect to Login
+            element={user ? <Dashboard /> : <Navigate to="/login" replace />}
+          />
+
+          {/* Catch-all Route */}
+          {/* Redirect unknown paths to Dashboard if logged in, otherwise to Home */}
+          <Route
+             path="*" // <-- UPDATED Catch-all Logic
+             element={<Navigate to={user ? "/dashboard" : "/"} replace />}
+          />
+
         </Routes>
       </main>
-      {/* Toaster or Footer could go here */}
     </>
   );
 }
