@@ -101,7 +101,7 @@ export async function logout(req: FastifyRequest, reply: FastifyReply) {
     path: '/', // same path you set it on
     httpOnly: true, // match your createUserSession settings
     secure: isProd, // only over HTTPS in production
-    sameSite: 'strict', // match your createUserSession settings
+    sameSite: 'lax', // match your createUserSession settings
   });
 
   // Inform the client
@@ -109,13 +109,27 @@ export async function logout(req: FastifyRequest, reply: FastifyReply) {
 }
 
 export async function getMe(req: FastifyRequest, reply: FastifyReply) {
-  // request.userId is populated by authenticate hook
+  if (!req.userId) {
+      // This check might be redundant if app.authenticate always provides userId or throws
+      return reply.status(401).send({ error: 'Unauthorized.' });
+  }
   const user = await prisma.user.findUnique({
     where: { id: req.userId },
+    // Select the fields needed by the frontend
+    select: {
+        id: true,
+        email: true,
+        name: true,
+        createdAt: true,
+        updatedAt: true,
+        isGmailConnected: true
+        // DO NOT return password or tokens
+    }
   });
   if (!user) {
+    // This case might mean the user was deleted after token was issued
+    reply.clearCookie('token'); // Clear potentially invalid cookie
     return reply.status(404).send({ error: 'User not found.' });
   }
-  const { password, ...userSafe } = user;
-  return reply.send(userSafe);
+  return reply.send(user);
 }

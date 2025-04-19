@@ -4,7 +4,7 @@
 // Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
 // Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
 
-// When updating this file: npx prisma db push (will push changes to Neon)
+// When updating this file: npx prisma db push (will push changes to Neon) (from backend when running command)
 generator client {
   provider = "prisma-client-js"
 }
@@ -23,6 +23,13 @@ model User {
   password  String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // Google OAuth fields
+  isGmailConnected  Boolean? @default(false)
+  googleAccessToken String?  // Optional: Store short-lived access token
+  googleRefreshToken String?  // Essential: Store long-lived refresh token (**ENCRYPT THIS IN PROD**)
+  googleTokenExpiry DateTime? // Optional: Store expiry date of access token
+  googleScopes      String[] // Optional: Store granted scopes
 
   // Relational field: one-to-many
   tasks      UnsubscribeTask[]

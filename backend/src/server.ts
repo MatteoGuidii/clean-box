@@ -2,6 +2,7 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import cookie from '@fastify/cookie';
 import jwtPlugin from './plugins/jwt';
+import oauthRoutes from './routes/oauthRoutes';
 import userRoutes from './routes/user';
 import { errorHandler } from './utils/errorHandler';
 
@@ -23,10 +24,12 @@ app.register(jwtPlugin);
 
 //  Register your routes
 app.register(userRoutes, { prefix: '/api/v1/users' });
+// Prefix OAuth routes under /api/v1 as well
+app.register(oauthRoutes, { prefix: '/api/v1' });
 
 // Global error handler
 app.setErrorHandler(errorHandler);
-
+  
 // Start server
 const start = async () => {
   try {

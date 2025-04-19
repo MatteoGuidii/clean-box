@@ -13,7 +13,7 @@ export async function createUserSession(reply: FastifyReply, userId: string): Pr
   reply.setCookie('token', token, {
     maxAge: 15 * 24 * 60 * 60, // 15 days (in seconds)
     httpOnly: true, // mitigates XSS
-    sameSite: 'strict', // mitigates CSRF
+    sameSite: 'lax', // mitigates CSRF
     secure: process.env.NODE_ENV !== 'development', // HTTPS in prod
     path: '/', // cookie is valid site‑wide
   });

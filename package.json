@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "dev": "nodemon --watch backend/src --ext ts,tsx --exec \"tsx backend/src/server.ts\"",
+    "dev": "nodemon --watch backend/src --ext ts,tsx --exec \"tsx -r dotenv/config backend/src/server.ts\"",
     "test": "echo \"Error: no test specified\" && exit 1",
     "lint": "eslint backend/src/**/*.{ts,tsx,js} --fix",
     "format": "prettier --write 'backend/src/**/*.{ts,tsx,js,json,md}'"
@@ -44,6 +44,7 @@
     "argon2": "^0.41.1",
     "bcrypt": "^5.1.1",
     "dotenv": "^16.4.7",
-    "fastify": "^5.2.2"
+    "fastify": "^5.2.2",
+    "google-auth-library": "^9.15.1"
   }
 }
