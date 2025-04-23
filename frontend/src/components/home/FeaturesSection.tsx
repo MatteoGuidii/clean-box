@@ -7,7 +7,7 @@ export default function FeaturesSection() {
     <div className="py-16 bg-base-200 px-4">
       <div className="max-w-4xl mx-auto">
         <h2 className="text-3xl font-bold text-center mb-12">
-          How Inbox Detox Works for You
+          How Clean Box Works for You
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8 text-center">
           {/* Feature 1 */}
@@ -15,7 +15,7 @@ export default function FeaturesSection() {
              <div className="prose lg:prose-xl mx-auto mb-4">🔄</div>
              <h3 className="text-xl font-semibold mb-2">1. Create a Task</h3>
              <p className="text-base-content/70">
-                Simply connect your inbox or provide unsubscribe links. We handle the rest securely.
+                Simply connect your inbox. We handle the rest securely.
              </p>
           </div>
           {/* Feature 2 */}

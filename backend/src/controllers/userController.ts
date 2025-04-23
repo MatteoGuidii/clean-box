@@ -7,7 +7,7 @@ import argon2 from 'argon2';
 interface SignupBody {
   email: string; // required
   password: string; // required
-  name?: string; // optional
+  name: string; // required
 }
 
 // Define the shape of req.body for login
@@ -21,7 +21,7 @@ export async function signup(req: FastifyRequest, reply: FastifyReply) {
   const { email, password, name } = req.body as SignupBody;
 
   // 2. Runtime validation (in case someone sends bad JSON)
-  if (!email || !password) {
+  if (!name || !email || !password) {
     // 400 error: Bad Request
     return reply.status(400).send({ error: 'Email and password are required.' });
   }
@@ -39,12 +39,12 @@ export async function signup(req: FastifyRequest, reply: FastifyReply) {
   // 4. Hash the password
   const hashedPassword = await argon2.hash(password);
 
-  // 5. Create the user record (name is optional)
+  // 5. Create the user record
   const user = await prisma.user.create({
     data: {
       email,
       password: hashedPassword,
-      name: name ?? null,
+      name,
     },
   });
 
@@ -110,21 +110,22 @@ export async function logout(req: FastifyRequest, reply: FastifyReply) {
 
 export async function getMe(req: FastifyRequest, reply: FastifyReply) {
   if (!req.userId) {
-      // This check might be redundant if app.authenticate always provides userId or throws
-      return reply.status(401).send({ error: 'Unauthorized.' });
+    // This check might be redundant if app.authenticate always provides userId or throws
+    return reply.status(401).send({ error: 'Unauthorized.' });
   }
   const user = await prisma.user.findUnique({
     where: { id: req.userId },
     // Select the fields needed by the frontend
     select: {
-        id: true,
-        email: true,
-        name: true,
-        createdAt: true,
-        updatedAt: true,
-        isGmailConnected: true
-        // DO NOT return password or tokens
-    }
+      id: true,
+      email: true,
+      name: true,
+      createdAt: true,
+      updatedAt: true,
+      isGmailConnected: true,
+      googleEmail: true
+      // DO NOT return password or tokens
+    },
   });
   if (!user) {
     // This case might mean the user was deleted after token was issued

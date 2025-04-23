@@ -37,7 +37,7 @@ export default function Navbar() {
       <div className="flex-1">
         {/* Link the app title back to Home */}
         <Link to="/" className="btn btn-ghost normal-case text-xl">
-          Inbox Detox
+          Clean Box
         </Link>
       </div>
       <div className="flex-none">
@@ -46,7 +46,7 @@ export default function Navbar() {
             // --- User is Logged In ---
             <>
               <li>
-                {/* Display user email (or other identifier) */}
+                {/* Display user name (or other identifier) */}
                 <span className="text-sm font-medium mr-2 hidden sm:inline"> {/* Hide on small screens */}
                   {user.email}
                 </span>

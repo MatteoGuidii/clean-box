@@ -10,7 +10,7 @@ export default function HeroSection() {
         Reclaim Your Inbox, Effortlessly.
       </h1>
       <p className="text-lg md:text-xl mb-8 max-w-2xl text-base-content/80">
-        Inbox Detox automatically unsubscribes you from unwanted mailing lists using AI,
+        Clean Box automatically unsubscribes you from unwanted mailing lists using AI,
         while keeping your privacy secure. Say goodbye to email clutter.
       </p>
       <div className="space-x-4">

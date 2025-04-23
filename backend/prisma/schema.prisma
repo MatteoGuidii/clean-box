@@ -18,7 +18,7 @@ datasource db {
 // Models
 model User {
   id        String   @id @default(cuid())
-  name      String?
+  name      String
   email     String   @unique
   password  String
   createdAt DateTime @default(now())
@@ -26,6 +26,7 @@ model User {
 
   // Google OAuth fields
   isGmailConnected  Boolean? @default(false)
+  googleEmail       String?
   googleAccessToken String?  // Optional: Store short-lived access token
   googleRefreshToken String?  // Essential: Store long-lived refresh token (**ENCRYPT THIS IN PROD**)
   googleTokenExpiry DateTime? // Optional: Store expiry date of access token

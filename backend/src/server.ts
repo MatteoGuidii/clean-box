@@ -29,7 +29,7 @@ app.register(oauthRoutes, { prefix: '/api/v1' });
 
 // Global error handler
 app.setErrorHandler(errorHandler);
-  
+
 // Start server
 const start = async () => {
   try {

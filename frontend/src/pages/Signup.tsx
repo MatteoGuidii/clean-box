@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../context/useAuth';
 
 export default function SignUp() {
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
@@ -15,7 +16,7 @@ export default function SignUp() {
     setError(null); // Clear previous form errors
 
     // Local form validation
-    if (!email || !password || !passwordConfirm) {
+    if (!name || !email || !password || !passwordConfirm) {
       setError('Please fill in all fields.'); return;
     }
     if (password !== passwordConfirm) {
@@ -33,11 +34,14 @@ export default function SignUp() {
     // if (!/[!@#$%^&*_]/.test(password)) {
     //   setError('Password must contain at least one special character.'); return;
     // }
+    if (name.length < 2) {
+      setError('Name must be at least 2 characters long.'); return;
+    }
 
     setIsSubmitting(true); // Indicate submission start
 
     try {
-      await signup(email, password); // Call context signup function
+      await signup(name, email, password); // Call context signup function
       // Navigation happens inside context on success
     } catch (err: unknown) {
        // Handle errors thrown by the context signup function
@@ -57,6 +61,17 @@ export default function SignUp() {
         <div className="card-body">
           <h2 className="card-title text-2xl justify-center mb-6">Create Your Account</h2>
           <form onSubmit={handleSubmit} noValidate>
+
+            {/* --- Name Input --- */}
+            <div className="form-control mb-4">
+              <label className="label" htmlFor="signup-name"><span className="label-text">Full Name</span></label>
+              <input type="text" id="signup-name" placeholder="Your Name"
+                className={`input input-bordered w-full ${error && error.toLowerCase().includes('name') ? 'input-error' : ''}`} // Basic error check
+                value={name} onChange={(e) => setName(e.target.value)}
+                required autoComplete="name" disabled={isSubmitting}
+              />
+            </div>
+
             {/* Email Input */}
             <div className="form-control mb-4">
               <label className="label" htmlFor="signup-email"><span className="label-text">Email</span></label>
@@ -66,6 +81,7 @@ export default function SignUp() {
                 required autoComplete="email" disabled={isSubmitting}
               />
             </div>
+
             {/* Password Input */}
             <div className="form-control mb-4">
               <label className="label" htmlFor="signup-password"><span className="label-text">Password</span></label>
@@ -75,6 +91,7 @@ export default function SignUp() {
                 required minLength={8} autoComplete="new-password" disabled={isSubmitting}
               />
             </div>
+
             {/* Confirm Password Input */}
             <div className="form-control mb-6">
               <label className="label" htmlFor="signup-passwordConfirm"><span className="label-text">Confirm Password</span></label>
@@ -84,6 +101,7 @@ export default function SignUp() {
                 required autoComplete="new-password" disabled={isSubmitting}
               />
             </div>
+
             {/* Error Message Display */}
             {error && (
               <div role="alert" className="alert alert-error shadow-lg mb-6">
@@ -91,6 +109,7 @@ export default function SignUp() {
                 <span>{error}</span>
               </div>
             )}
+
             {/* Submit Button */}
             <div className="form-control mt-6">
               <button type="submit" className={`btn btn-primary w-full ${isSubmitting ? 'loading' : ''}`} disabled={isSubmitting}>
@@ -98,6 +117,7 @@ export default function SignUp() {
               </button>
             </div>
           </form>
+          
           {/* Link to Login */}
           <div className="text-center mt-4">
             <span className="text-sm text-base-content/70">Already have an account? </span>

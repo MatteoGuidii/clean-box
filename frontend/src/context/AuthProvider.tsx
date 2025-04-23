@@ -83,13 +83,13 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
 
   // --- Signup function ---
   // Calls signup API, navigates to login on success
-   const signup = useCallback(async (email: string, password: string) => {
+   const signup = useCallback(async (name: string, email: string, password: string) => {
      console.log('[AuthProvider] Attempting signup...');
      try {
        const response = await fetch('/api/v1/users/signup', {
          method: 'POST',
          headers: { 'Content-Type': 'application/json' },
-         body: JSON.stringify({ email, password }),
+         body: JSON.stringify({ name, email, password }),
          // No credentials needed for signup request
        });
        if (!response.ok) {
