@@ -1,5 +1,5 @@
 // src/pages/Dashboard.tsx
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../context/useAuth';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { CheckCircleIcon, ClockIcon, ExclamationCircleIcon, LinkIcon, ChartBarIcon, InboxArrowDownIcon } from '@heroicons/react/24/outline'; // Assuming you installed @heroicons/react
