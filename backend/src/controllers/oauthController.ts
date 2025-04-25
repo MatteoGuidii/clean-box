@@ -3,27 +3,29 @@ import { FastifyRequest, FastifyReply } from 'fastify';
 import { OAuth2Client } from 'google-auth-library';
 import prisma from '../db/prisma';
 import { asyncHandler } from '../utils/asyncHandler';
+import { encrypt } from '../utils/encryption'; // Import encrypt
 
-// Ensure Google environment variables are loaded (checked at startup ideally, or here)
-if (
-  !process.env.GOOGLE_CLIENT_ID ||
-  !process.env.GOOGLE_CLIENT_SECRET ||
-  !process.env.GOOGLE_CALLBACK_URL
-) {
-  // This check might be better placed in server.ts after dotenv.config()
-  // Or use a config module that validates env vars on startup.
+// Environment variable checks (assuming dotenv loaded once in server.ts or preloaded)
+// These checks run once when the module loads. Consider a dedicated config module for validation.
+if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !process.env.GOOGLE_CALLBACK_URL) {
   console.error('CRITICAL: Missing Google OAuth environment variables!');
-  // Optionally throw an error to prevent startup if critical vars are missing
+  // Optionally throw error to prevent startup if critical
   // throw new Error("Missing Google OAuth environment variables!");
 }
-// Ensure Frontend Origin is loaded
 if (!process.env.FRONTEND_ORIGIN) {
   console.warn('WARN: Missing FRONTEND_ORIGIN environment variable! Using fallback.');
 }
+if (!process.env.GOOGLE_TOKEN_ENCRYPTION_KEY) {
+    console.error('CRITICAL: Missing GOOGLE_TOKEN_ENCRYPTION_KEY environment variable!');
+    // Optionally throw error
+    // throw new Error('Missing required GOOGLE_TOKEN_ENCRYPTION_KEY environment variable');
+}
 
-// Initialize Google OAuth2 client (assuming env vars are loaded)
+
+// Initialize Google OAuth2 client
+// Ensure env vars are correctly loaded *before* this line executes
 const oauth2Client = new OAuth2Client(
-  process.env.GOOGLE_CLIENT_ID!, // Add '!' if sure they exist after check/startup validation
+  process.env.GOOGLE_CLIENT_ID!,
   process.env.GOOGLE_CLIENT_SECRET!,
   process.env.GOOGLE_CALLBACK_URL!,
 );
@@ -35,15 +37,17 @@ export const initiateGoogleOAuth = asyncHandler(
       return reply.status(401).send({ error: 'User must be logged in.' });
     }
 
+    // Define scopes needed
     const scopes = [
-      'https://www.googleapis.com/auth/userinfo.email',
-      'https://www.googleapis.com/auth/gmail.metadata',
+      'https://www.googleapis.com/auth/userinfo.email', // To get user's Google email address
+      'https://www.googleapis.com/auth/gmail.metadata', // To scan for List-Unsubscribe headers
     ];
 
+    // Generate the authorization URL
     const authorizeUrl = oauth2Client.generateAuthUrl({
-      access_type: 'offline',
+      access_type: 'offline', // Request refresh token
       scope: scopes,
-      prompt: 'consent',
+      prompt: 'consent', // Force consent screen (good for testing, maybe remove in prod)
     });
 
     console.log('[OAuthController] Redirecting user to Google');
@@ -54,78 +58,106 @@ export const initiateGoogleOAuth = asyncHandler(
 // 2. Handle Google OAuth Callback
 export const handleGoogleOAuthCallback = asyncHandler(
   async (req: FastifyRequest, reply: FastifyReply) => {
-    // Get frontend origin (provide a default fallback for safety)
+    // Determine frontend origin for redirects
     const frontendOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
 
+    // Ensure user is still logged into our app session
     if (!req.userId) {
       console.error('[OAuthController] Callback received without active session.');
-      // Redirect to frontend LOGIN page with error
       return reply.redirect(`${frontendOrigin}/login?error=session_expired`);
     }
 
+    // Get the authorization code from the query parameters
     const { code } = req.query as { code?: string };
-
     if (!code) {
-      console.error('[OAuthController] No authorization code received.');
-      // Redirect to frontend DASHBOARD page with error
+      console.error('[OAuthController] No authorization code received from Google.');
       return reply.redirect(`${frontendOrigin}/dashboard?error=oauth_failed_no_code`);
     }
 
-    console.log('[OAuthController] Received code, exchanging for tokens...');
+    console.log('[OAuthController] Received code, attempting to exchange for tokens...');
     try {
+      // Exchange the authorization code for tokens
       const { tokens } = await oauth2Client.getToken(code);
-      console.log('[OAuthController] Tokens received.');
 
+      // Extract individual tokens
       const { access_token, refresh_token, expiry_date, scope } = tokens;
 
-      // --- Fetch Google User Info ---
-     let googleUserEmail: string | undefined | null = null;
-     if (access_token) {
-        // Set credentials on the client to make authenticated requests
+      // Log presence of refresh token
+      if (refresh_token) {
+          console.log('[OAuthController] Refresh token IS PRESENT in the response from Google.');
+      } else {
+          console.warn('[OAuthController] Refresh token IS MISSING in the response from Google.');
+      }
+
+      // Fetch Google User Info using the received access token
+      let googleUserEmail: string | undefined | null = null;
+      if (access_token) {
+        // --- FIX: Set credentials on the client BEFORE making requests ---
+        // This configures the oauth2Client instance to use the newly obtained tokens
+        // for subsequent requests made with this instance.
         oauth2Client.setCredentials(tokens);
-        // Use googleapis library or fetch directly
+        // -----------------------------------------------------------------
         try {
-            const userInfoResponse = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
-                headers: { 'Authorization': `Bearer ${access_token}` }
-            });
-            if (userInfoResponse.ok) {
-                const userInfo = await userInfoResponse.json();
-                googleUserEmail = userInfo.email;
-                console.log('[OAuthController] Fetched Google User Info, Email:', googleUserEmail);
-            } else {
-                 console.warn('[OAuthController] Failed to fetch Google user info:', userInfoResponse.status);
-            }
-        } catch(userInfoError) {
-             console.error('[OAuthController] Error fetching Google user info:', userInfoError);
+          console.log('[OAuthController] Fetching Google user info...');
+          // Make authenticated request to Google's userinfo endpoint
+          const userInfoResponse = await oauth2Client.request<{ email?: string }>({
+              url: 'https://www.googleapis.com/oauth2/v2/userinfo'
+          });
+          googleUserEmail = userInfoResponse.data.email; // Extract email from response data
+          console.log('[OAuthController] Fetched Google User Info, Email:', googleUserEmail);
+        } catch (userInfoError) {
+          console.error('[OAuthController] Error fetching Google user info:', userInfoError);
+          // Decide how to handle this: maybe log and continue, or redirect with error?
+          // Continuing allows connection saving even if email fetch fails.
         }
-     } else {
-         console.warn('[OAuthController] No access token received, cannot fetch Google user info.');
-     }
-     
-      // ** PRODUCTION SECURITY: ENCRYPT refresh_token HERE **
-      const storedRefreshToken = refresh_token;
+      } else {
+        console.warn('[OAuthController] No access token received, cannot fetch Google user info.');
+      }
+
+      // Encrypt the refresh token if one was received
+      let encryptedRefreshToken: string | null = null;
+      if (refresh_token) {
+        console.log('[OAuthController] Attempting to encrypt refresh token...');
+        try {
+            encryptedRefreshToken = encrypt(refresh_token); // Call your encryption utility
+            console.log('[OAuthController] Refresh token encrypted successfully.');
+        } catch(encryptionError) {
+             console.error('[OAuthController] CRITICAL: Failed to encrypt refresh token!', encryptionError);
+             // If encryption fails, we cannot securely store the token. Throw error.
+             throw new Error('Failed to secure refresh token during callback.');
+        }
+      }
 
       // Save/Update tokens and status in the database
+      console.log('[OAuthController] Attempting to update user in database...');
       await prisma.user.update({
-        where: { id: req.userId },
+        where: { id: req.userId }, // Update the record for the logged-in user
         data: {
-          isGmailConnected: true,
-          googleEmail: googleUserEmail || null,
-          googleAccessToken: access_token || null,
-          ...(storedRefreshToken && { googleRefreshToken: storedRefreshToken }), // Only update if received
-          googleTokenExpiry: expiry_date ? new Date(expiry_date) : null,
-          googleScopes: scope ? scope.split(' ') : [],
+          isGmailConnected: true, // Mark as connected
+          googleEmail: googleUserEmail || null, // Store the connected Google email
+          googleAccessToken: access_token || null, // Store current access token (optional)
+          // Conditionally update refresh token only if a new encrypted one was generated
+          ...(encryptedRefreshToken && { googleRefreshToken: encryptedRefreshToken }),
+          googleTokenExpiry: expiry_date ? new Date(expiry_date) : null, // Store expiry time
+          googleScopes: scope ? scope.split(' ') : [], // Store granted scopes
         },
       });
 
-      console.log('[OAuthController] Tokens stored for user:', req.userId);
-      // --- CORRECTED REDIRECT (using FRONTEND_ORIGIN) ---
+      console.log('[OAuthController] User record updated successfully for user:', req.userId);
+      // Redirect back to the frontend dashboard, indicating success
       reply.redirect(`${frontendOrigin}/dashboard?connected=true`);
+
     } catch (error: any) {
-      console.error('[OAuthController] Error exchanging code or saving tokens:', error);
-      // --- CORRECTED REDIRECT (using FRONTEND_ORIGIN) ---
+      // Handle errors during token exchange or DB update
+      console.error('[OAuthController] Error during OAuth callback processing:', error);
+      // Try to extract a meaningful error message
+      const errorMessage = error.response?.data?.error_description || // Standard OAuth error
+                           error.response?.data?.error ||          // Another common OAuth error field
+                           error.message ||                        // General error message
+                           'token_processing_failed';              // Fallback
+      // Redirect back to frontend dashboard with error message
       reply.redirect(
-        `${frontendOrigin}/dashboard?error=${encodeURIComponent(error.message || 'token_exchange_failed')}`,
+        `${frontendOrigin}/dashboard?error=${encodeURIComponent(errorMessage)}`,
       );
     }
   },
@@ -137,10 +169,10 @@ export const disconnectGoogleAccount = asyncHandler(
     if (!req.userId) {
       return reply.status(401).send({ error: 'Unauthorized' });
     }
-
     console.log('[OAuthController] Disconnecting Google account for user:', req.userId);
     try {
-      // Optional: Revoke token... (code omitted for brevity)
+      // Optional: Add logic here to revoke the token with Google using oauth2Client.revokeToken()
+      // This requires fetching the user, decrypting the refresh token first.
 
       // Clear stored tokens and status in database
       await prisma.user.update({
@@ -149,7 +181,7 @@ export const disconnectGoogleAccount = asyncHandler(
           isGmailConnected: false,
           googleEmail: null,
           googleAccessToken: null,
-          googleRefreshToken: null, // Clear the (encrypted) token
+          googleRefreshToken: null, // Clear the encrypted token
           googleTokenExpiry: null,
           googleScopes: [],
         },

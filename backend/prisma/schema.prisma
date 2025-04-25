@@ -18,7 +18,7 @@ datasource db {
 // Models
 model User {
   id        String   @id @default(cuid())
-  name      String
+  name      String   
   email     String   @unique
   password  String
   createdAt DateTime @default(now())
@@ -26,24 +26,28 @@ model User {
 
   // Google OAuth fields
   isGmailConnected  Boolean? @default(false)
-  googleEmail       String?
+  googleEmail       String?  // Connected Google account email
   googleAccessToken String?  // Optional: Store short-lived access token
   googleRefreshToken String?  // Essential: Store long-lived refresh token (**ENCRYPT THIS IN PROD**)
   googleTokenExpiry DateTime? // Optional: Store expiry date of access token
   googleScopes      String[] // Optional: Store granted scopes
 
   // Relational field: one-to-many
-  tasks      UnsubscribeTask[]
+  tasks     UnsubscribeTask[]
 }
 
 model UnsubscribeTask {
   id         String    @id @default(cuid())
   userId     String
-  url        String
-  status     String    @default("pending") // e.g. pending, success, failed
+  url        String    // The unsubscribe URL found
+  senderEmail String?   // --- ADDED: Email address of the sender ---
+  status     String    @default("pending") // e.g., pending_approval, queued, processing, success, failed
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
   // Relation back to the user
   user       User      @relation(fields: [userId], references: [id])
+
+  // Optional: Add an index for faster lookups by user and status
+  // @@index([userId, status])
 }
