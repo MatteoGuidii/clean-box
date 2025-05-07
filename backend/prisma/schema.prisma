@@ -46,4 +46,6 @@ model UnsubscribeTask {
 
   // Relation back to the user
   user       User      @relation(fields: [userId], references: [id])
+
+   @@unique([userId, url])
 }

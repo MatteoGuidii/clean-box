@@ -1,41 +1,83 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { Task, AppStats, FetchedUser } from '@/types/cleanbox';
 
-interface UseDashboardResult {
+/* ------------------------------------------------------------------ */
+/*  Types                                                             */
+/* ------------------------------------------------------------------ */
+export interface UseDashboardResult {
   isAccountConnected: boolean | null;
   stats: AppStats | null;
   recentTasks: Task[];
   processingTasks: Task[];
   loading: boolean;
+  scanning: boolean;        
   error: string | null;
   action: string | null;
+  scanNow(): Promise<void>;  
   connectGmail(): void;
   disconnectGmail(): Promise<void>;
 }
 
-/** Safely turn an unknown error into a readable string */
+/* ------------------------------------------------------------------ */
+/*  Helpers                                                           */
+/* ------------------------------------------------------------------ */
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return typeof err === 'string' ? err : 'Unexpected error';
 }
 
-/**
- * Encapsulates all async + state logic for the Dashboard page.
- */
+async function fetchJSON<T>(
+  url: string,
+  init?: RequestInit,
+): Promise<T> {
+  const res = await fetch(url, {
+    credentials: 'include',
+    ...init,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body?.error || res.statusText);
+  }
+  return res.json() as Promise<T>;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Hook                                                              */
+/* ------------------------------------------------------------------ */
 export function useDashboard(
-  user: FetchedUser | undefined,
+  user: FetchedUser | null,
 ): UseDashboardResult {
-  const [isAccountConnected, setIsAccountConnected] = useState<boolean | null>(
-    null,
-  );
+  const [isAccountConnected, setIsAccountConnected] =
+    useState<boolean | null>(null);
   const [stats, setStats] = useState<AppStats | null>(null);
   const [recentTasks, setRecentTasks] = useState<Task[]>([]);
   const [processingTasks, setProcessingTasks] = useState<Task[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [loading, setLoading] = useState(true);
+  const [scanning, setScanning] = useState(false);      // NEW
   const [error, setError] = useState<string | null>(null);
   const [action, setAction] = useState<string | null>(null);
 
-  /* ---------- data fetch ---------- */
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
+
+  /* ---------- fetch stats + tasks helper ---------- */
+  const refreshData = useCallback(async () => {
+    try {
+      /* stats */
+      const s = await fetchJSON<AppStats>('/api/v1/stats');
+      setStats(s);
+
+      /* tasks */
+      const t = await fetchJSON<{ processing: Task[]; recent: Task[] }>(
+        '/api/v1/tasks?limit=50',
+      );
+      setProcessingTasks(t.processing);
+      setRecentTasks(t.recent);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    }
+  }, []);
+
+  /* ---------- initial load + polling ---------- */
   useEffect(() => {
     if (!user) {
       setLoading(false);
@@ -47,54 +89,17 @@ export function useDashboard(
     (async () => {
       try {
         setLoading(true);
-
-        /* ----- /me ----- */
-        const res = await fetch('/api/v1/users/me', { credentials: 'include' });
-        if (!res.ok) throw new Error('Failed to fetch user status');
-        const me: FetchedUser = await res.json();
+        const me = await fetchJSON<FetchedUser>('/api/v1/users/me');
         if (!alive) return;
-
         const connected = me.isGmailConnected ?? false;
         setIsAccountConnected(connected);
 
         if (connected) {
-          /* ----- stats / tasks (mock) ----- */
-          await new Promise<void>(r => setTimeout(r, 400)); // TODO real endpoint
-          if (!alive) return;
-
-          setStats({
-            totalAttempted: 5,
-            successful: 3,
-            failed: 1,
-            emailsAvoidedEstimate: 150,
-          });
-          setRecentTasks([
-            {
-              id: '1',
-              url: 'newsletter@example.com',
-              status: 'success',
-              createdAt: '',
-              updatedAt: '',
-            },
-            {
-              id: '2',
-              url: 'spam@example.net',
-              status: 'failed',
-              createdAt: '',
-              updatedAt: '',
-            },
-          ]);
-          setProcessingTasks([
-            {
-              id: '3',
-              url: 'marketing@example.org',
-              status: 'processing',
-              createdAt: '',
-              updatedAt: '',
-            },
-          ]);
+          await refreshData();
+          // start polling every 10 s
+          pollRef.current = setInterval(refreshData, 10_000);
         }
-      } catch (err: unknown) {
+      } catch (err) {
         setError(getErrorMessage(err));
       } finally {
         if (alive) setLoading(false);
@@ -103,47 +108,67 @@ export function useDashboard(
 
     return () => {
       alive = false;
+      if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [user]);
+  }, [user, refreshData]);
 
-  /* ---------- actions ---------- */
+  /* ---------- scanNow ---------- */
+  const scanNow = useCallback(async () => {
+    setError(null);
+    setAction(null);
+    setScanning(true);
+    try {
+      const { created } = await fetchJSON<{ created: number }>(
+        '/api/v1/scan',
+        { method: 'POST' },
+      );
+      setAction(
+        created
+          ? `Created ${created} unsubscribe task${created > 1 ? 's' : ''}.`
+          : 'No new subscriptions found.',
+      );
+      await refreshData(); // immediate refresh after scan
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setScanning(false);
+      // clear action msg after 5 s
+      setTimeout(() => setAction(null), 5_000);
+    }
+  }, [refreshData]);
 
+  /* ---------- connect / disconnect ---------- */
   const connectGmail = () => {
     setError(null);
     window.location.href = '/api/v1/connect/google';
   };
 
-  const disconnectGmail = async () => {
+  const disconnectGmail = useCallback(async () => {
     if (!window.confirm('Disconnect Google Account?')) return;
     setError(null);
-
     try {
-      const res = await fetch('/api/v1/disconnect/google', {
-        method: 'POST',
-        credentials: 'include',
-      });
-      if (!res.ok) throw new Error('Failed to disconnect account');
-
+      await fetchJSON('/api/v1/disconnect/google', { method: 'POST' });
       setIsAccountConnected(false);
       setStats(null);
       setRecentTasks([]);
       setProcessingTasks([]);
-      setAction('Google Account disconnected successfully.');
-      setTimeout(() => setAction(null), 5_000);
-    } catch (err: unknown) {
+      setAction('Google Account disconnected.');
+    } catch (err) {
       setError(getErrorMessage(err));
-      setTimeout(() => setError(null), 7_000);
     }
-  };
+  }, []);
 
+  /* ---------- return ---------- */
   return {
     isAccountConnected,
     stats,
     recentTasks,
     processingTasks,
     loading,
+    scanning,
     error,
     action,
+    scanNow,
     connectGmail,
     disconnectGmail,
   };
