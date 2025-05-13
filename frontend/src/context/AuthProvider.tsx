@@ -1,6 +1,12 @@
 // src/context/AuthProvider.tsx
-import React, { useState, useEffect, useCallback, ReactNode, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, {
+  useState,
+  useEffect,
+  useCallback,
+  ReactNode,
+  useMemo,
+} from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 // Import the context OBJECT and TYPE from the definition file
 import { AuthContext, User } from './AuthContextDefinition';
 
@@ -14,6 +20,7 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true); // Start true until initial check done
   const navigate = useNavigate();
+  const location = useLocation(); // router location (NEW)
 
   // --- checkAuthStatus function ---
   // Checks session via /me endpoint, updates user state
@@ -51,97 +58,130 @@ export const AuthProvider: React.FC<AuthProviderProps> = ({ children }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run only once on initial mount
 
+  // Re‑run auth check when Google redirects back with ?connected= / ?error=
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.has('connected') || params.has('error')) {
+      checkAuthStatus().finally(() => {
+        // Clear Google redirect params so the effect doesn't loop
+        if (location.search) {
+          navigate(location.pathname, { replace: true });
+        }
+      });
+    }
+  }, [location.search, location.pathname, checkAuthStatus, navigate]); // NEW effect
 
   // --- Login function ---
   // Calls login API, then updates user state via checkAuthStatus, navigates
-  const login = useCallback(async (email: string, password: string) => {
-     console.log('[AuthProvider] Attempting login...');
-     try {
-       const response = await fetch('/api/v1/users/login', {
-         method: 'POST',
-         headers: { 'Content-Type': 'application/json' },
-         body: JSON.stringify({ email, password }),
-         credentials: 'include', // Crucial
-       });
-       if (!response.ok) {
-         let message = `Login failed (status: ${response.status})`;
-         try { const data = await response.json(); message = data?.message || message; } catch { /* Ignore JSON parse error on failure */ }
-         throw new Error(message); // Throw error for component to catch
-       }
-       // Success: Cookie is set by browser via Set-Cookie header
-       console.log('[AuthProvider] Login API call successful. Fetching user data...');
-       await checkAuthStatus(); // Refresh user state
-       console.log('[AuthProvider] Navigating to /'); // Adjusted navigation target
-       navigate('/'); // Navigate to HOME after successful login (since no dashboard)
-     } catch (error) {
-       console.error('[AuthProvider] Login error:', error);
-       setUser(null); // Ensure user is null on login failure
-       throw error; // Re-throw for component UI
-     }
-   }, [navigate, checkAuthStatus]); // Dependencies
-
+  const login = useCallback(
+    async (email: string, password: string) => {
+      console.log('[AuthProvider] Attempting login...');
+      try {
+        const response = await fetch('/api/v1/users/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+          credentials: 'include', // Crucial
+        });
+        if (!response.ok) {
+          let message = `Login failed (status: ${response.status})`;
+          try {
+            const data = await response.json();
+            message = data?.message || message;
+          } catch {
+            /* Ignore JSON parse error on failure */
+          }
+          throw new Error(message); // Throw error for component to catch
+        }
+        // Success: Cookie is set by browser via Set-Cookie header
+        console.log(
+          '[AuthProvider] Login API call successful. Fetching user data...',
+        );
+        await checkAuthStatus(); // Refresh user state
+        console.log('[AuthProvider] Navigating to /dashboard'); // Adjusted navigation target
+        navigate('/dashboard'); // Navigate to DASHBOARD after successful login (changed)
+      } catch (error) {
+        console.error('[AuthProvider] Login error:', error);
+        setUser(null); // Ensure user is null on login failure
+        throw error; // Re-throw for component UI
+      }
+    },
+    [navigate, checkAuthStatus],
+  ); // Dependencies
 
   // --- Signup function ---
   // Calls signup API, navigates to login on success
-   const signup = useCallback(async (name: string, email: string, password: string) => {
-     console.log('[AuthProvider] Attempting signup...');
-     try {
-       const response = await fetch('/api/v1/users/signup', {
-         method: 'POST',
-         headers: { 'Content-Type': 'application/json' },
-         body: JSON.stringify({ name, email, password }),
-         // No credentials needed for signup request
-       });
-       if (!response.ok) {
-         let message = `Signup failed (status: ${response.status})`;
-         try { const data = await response.json(); message = data?.message || message; } catch { /* Ignore JSON parse error on failure */ }
-         throw new Error(message); // Throw error for component
-       }
-       // Success
-       console.log('[AuthProvider] Signup successful. Navigating to login.');
-       alert('Sign up successful! Please log in.'); // Consider using a toast notification later
-       navigate('/login');
-     } catch (error) {
-       console.error('[AuthProvider] Signup error:', error);
-       throw error; // Re-throw for component
-     }
-   }, [navigate]); // Dependency
-
+  const signup = useCallback(
+    async (name: string, email: string, password: string) => {
+      console.log('[AuthProvider] Attempting signup...');
+      try {
+        const response = await fetch('/api/v1/users/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, email, password }),
+          // No credentials needed for signup request
+        });
+        if (!response.ok) {
+          let message = `Signup failed (status: ${response.status})`;
+          try {
+            const data = await response.json();
+            message = data?.message || message;
+          } catch {
+            /* Ignore JSON parse error on failure */
+          }
+          throw new Error(message); // Throw error for component
+        }
+        // Success
+        console.log('[AuthProvider] Signup successful. Navigating to login.');
+        alert('Sign up successful! Please log in.'); // Consider using a toast notification later
+        navigate('/login');
+      } catch (error) {
+        console.error('[AuthProvider] Signup error:', error);
+        throw error; // Re-throw for component
+      }
+    },
+    [navigate],
+  ); // Dependency
 
   // --- Logout function ---
   // Calls logout API, always clears user state and navigates
-   const logout = useCallback(async () => {
-     console.log('[AuthProvider] Attempting logout...');
-     try {
-       // Call API to invalidate session/cookie on backend
-       await fetch('/api/v1/users/logout', {
-         method: 'POST',
-         credentials: 'include', // Crucial to send cookie for backend invalidation
-       });
-       console.log('[AuthProvider] Logout API call finished.');
-     } catch (error) {
-       console.error('[AuthProvider] Logout API error:', error);
-       // Continue with client-side logout regardless
-     } finally {
-       // Always clear client state and redirect
-       console.log('[AuthProvider] Clearing user state and navigating to login.');
-       setUser(null);
-       navigate('/login');
-     }
-   }, [navigate]); // Dependency
-
+  const logout = useCallback(async () => {
+    console.log('[AuthProvider] Attempting logout...');
+    try {
+      // Call API to invalidate session/cookie on backend
+      await fetch('/api/v1/users/logout', {
+        method: 'POST',
+        credentials: 'include', // Crucial to send cookie for backend invalidation
+      });
+      console.log('[AuthProvider] Logout API call finished.');
+    } catch (error) {
+      console.error('[AuthProvider] Logout API error:', error);
+      // Continue with client-side logout regardless
+    } finally {
+      // Always clear client state and redirect
+      console.log(
+        '[AuthProvider] Clearing user state and navigating to login.',
+      );
+      setUser(null);
+      navigate('/login');
+    }
+  }, [navigate]); // Dependency
 
   // Memoize the context value to prevent unnecessary re-renders of consumers
   // when the provider itself re-renders but the value hasn't changed.
-   const value = useMemo(() => ({
-    user,
-    isLoading,
-    login,
-    signup,
-    logout,
-  }), [user, isLoading, login, signup, logout]); // Dependencies for memoization
-
+  const value = useMemo(
+    () => ({
+      user,
+      isLoading,
+      login,
+      signup,
+      logout,
+    }),
+    [user, isLoading, login, signup, logout],
+  ); // Dependencies for memoization
 
   // Provide the value using the imported AuthContext object
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
+  );
 };

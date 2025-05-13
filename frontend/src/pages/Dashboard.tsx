@@ -32,8 +32,8 @@ export default function Dashboard() {
     connectGmail,
     disconnectGmail,
     scanNow,            // new handler
-  } = useDashboard(user);  
-  
+  } = useDashboard(user);
+
   /* ------------------------------------------------------------------ */
   /* 3 While Auth context still resolving                              */
   /* ------------------------------------------------------------------ */
@@ -46,7 +46,7 @@ export default function Dashboard() {
   }
 
   /* ------------------------------------------------------------------ */
-  /* 4 Main render                                                                               */
+  /* 4 Main render                                                     */
   /* ------------------------------------------------------------------ */
   return (
     <div className="container mx-auto p-4 md:p-6 lg:p-8 bg-base-200 min-h-screen">
@@ -78,7 +78,8 @@ export default function Dashboard() {
         <div className="lg:col-span-1 space-y-6">
           <GmailConnectionCard
             isAccountConnected={isAccountConnected}
-            googleEmail={user.googleEmail ?? undefined}
+            /* NEW: read email from activeGoogleAccount */
+            googleEmail={user.activeGoogleAccount?.email ?? undefined}
             loading={loading}
             scanning={scanning}
             connect={connectGmail}

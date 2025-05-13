@@ -4,119 +4,114 @@ import { OAuth2Client } from 'google-auth-library';
 import prisma from '../db/prisma';
 import { asyncHandler } from '../utils/asyncHandler';
 
-/* ------------------------------------------------------------------ */
-/*  Env checks (ideally done at server bootstrap)                      */
-/* ------------------------------------------------------------------ */
+/* ---------- env checks ---------- */
 ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_CALLBACK_URL'].forEach(
-  key => {
-    if (!process.env[key]) {
-      console.error(`CRITICAL: ${key} env var is missing`);
-    }
-  },
+  k => { if (!process.env[k]) console.error(`CRITICAL env ${k} missing`); },
 );
+const FRONTEND = process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
 
-if (!process.env.FRONTEND_ORIGIN) {
-  console.warn(
-    'WARN: FRONTEND_ORIGIN env var missing – defaulting to http://localhost:5173',
-  );
-}
-
-/* ------------------------------------------------------------------ */
-/*  Google OAuth client                                                */
-/* ------------------------------------------------------------------ */
-const oauth2Client = new OAuth2Client(
+/* ---------- Google client ---------- */
+const oauth2 = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID!,
   process.env.GOOGLE_CLIENT_SECRET!,
   process.env.GOOGLE_CALLBACK_URL!,
 );
 
 /* ------------------------------------------------------------------ */
-/* 1. Initiate Google OAuth Flow                                       */
+/* 1. START OAuth flow                                                */
 /* ------------------------------------------------------------------ */
 export const initiateGoogleOAuth = asyncHandler(
   async (req: FastifyRequest, reply: FastifyReply) => {
-    if (!req.userId) {
-      return reply.status(401).send({ error: 'User must be logged in.' });
-    }
+    if (!req.userId) return reply.code(401).send({ error: 'Login first.' });
 
     const scopes = [
-      // keeps metadata‑only listing
       'https://www.googleapis.com/auth/gmail.metadata',
-      // NEW: allows use of the `q` search parameter
       'https://www.googleapis.com/auth/gmail.readonly',
-      // show email in consent screen
       'https://www.googleapis.com/auth/userinfo.email',
     ];
 
-    const authorizeUrl = oauth2Client.generateAuthUrl({
-      access_type: 'offline', // refresh_token
-      prompt: 'consent',      // always show to guarantee refresh_token
+    const url = oauth2.generateAuthUrl({
+      access_type: 'offline',
+      prompt: 'consent',
       include_granted_scopes: true,
       scope: scopes,
-      state: String(req.userId), // optional CSRF/user tie‑back
+      state: String(req.userId),            // CSRF tie‑back
     });
 
-    reply.redirect(authorizeUrl);
+    reply.redirect(url);
   },
 );
 
 /* ------------------------------------------------------------------ */
-/* 2. Handle OAuth Callback                                            */
+/* 2. HANDLE callback                                                 */
 /* ------------------------------------------------------------------ */
 export const handleGoogleOAuthCallback = asyncHandler(
   async (req: FastifyRequest, reply: FastifyReply) => {
-    const frontendOrigin =
-      process.env.FRONTEND_ORIGIN || 'http://localhost:5173';
-
     if (!req.userId) {
-      return reply.redirect(
-        `${frontendOrigin}/login?error=session_expired`,
-      );
+      return reply.redirect(`${FRONTEND}/login?error=session_expired`);
     }
 
     const { code } = req.query as { code?: string };
     if (!code) {
-      return reply.redirect(
-        `${frontendOrigin}/dashboard?error=oauth_failed_no_code`,
-      );
+      return reply.redirect(`${FRONTEND}/dashboard?error=no_code`);
     }
 
     try {
-      const { tokens } = await oauth2Client.getToken(code);
+      const { tokens } = await oauth2.getToken(code);
       const { access_token, refresh_token, expiry_date, scope } = tokens;
 
-      /* ----- (optional) fetch email for UI display ----- */
-      let googleUserEmail: string | null = null;
+      /* ----- fetch Gmail address (must succeed!) ------------------ */
+      let email: string | null = null;
       if (access_token) {
-        const userInfo = await fetch(
-          'https://www.googleapis.com/oauth2/v2/userinfo',
-          {
-            headers: { Authorization: `Bearer ${access_token}` },
-          },
-        ).then(r => (r.ok ? r.json() : null));
-        googleUserEmail = userInfo?.email ?? null;
+        email = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+          headers: { Authorization: `Bearer ${access_token}` },
+        })
+          .then(r => (r.ok ? r.json() : null))
+          .then(j => j?.email ?? null)
+          .catch(() => null);
       }
 
-      /* ----- Store / update DB ----- */
-      await prisma.user.update({
-        where: { id: req.userId },
-        data: {
-          isGmailConnected: true,
-          googleEmail: googleUserEmail,
-          googleAccessToken: access_token,
-          // **IMPORTANT**: refresh_token may be undefined on re‑consent
-          ...(refresh_token && { googleRefreshToken: refresh_token }),
-          googleTokenExpiry: expiry_date ? new Date(expiry_date) : null,
-          googleScopes: scope ? scope.split(' ') : [],
+      if (!email) {
+        console.error('[OAuth] Could not retrieve Gmail address.');
+        return reply.redirect(
+          `${FRONTEND}/dashboard?error=no_email`,
+        );
+      }
+
+      /* ----- upsert GoogleAccount row ----------------------------- */
+      const account = await prisma.googleAccount.upsert({
+        where: {
+          userId_email: { userId: req.userId, email }, // composite unique
+        },
+        update: {
+          accessToken: access_token ?? undefined,
+          tokenExpiry: expiry_date ? new Date(expiry_date) : null,
+          scopes: scope?.split(' ') ?? [],
+          ...(refresh_token && { refreshToken: refresh_token }),
+          /* (optional) isRevoked: false */
+        },
+        create: {
+          userId: req.userId,
+          email,
+          accessToken: access_token ?? undefined,
+          refreshToken: refresh_token!,     // first‑time must exist
+          tokenExpiry: expiry_date ? new Date(expiry_date) : null,
+          scopes: scope?.split(' ') ?? [],
         },
       });
 
-      reply.redirect(`${frontendOrigin}/dashboard?connected=true`);
-    } catch (error: any) {
-      console.error('[OAuthController] Callback error:', error);
+      /* ----- set as ACTIVE --------------------------------------- */
+      await prisma.user.update({
+        where: { id: req.userId },
+        data: { activeGoogleAccountId: account.id },
+      });
+
+      reply.redirect(`${FRONTEND}/dashboard?connected=true`);
+    } catch (err: any) {
+      console.error('[OAuth] callback error', err);
       reply.redirect(
-        `${frontendOrigin}/dashboard?error=${encodeURIComponent(
-          error.message || 'token_exchange_failed',
+        `${FRONTEND}/dashboard?error=${encodeURIComponent(
+          err.message || 'token_exchange_failed',
         )}`,
       );
     }
@@ -124,34 +119,52 @@ export const handleGoogleOAuthCallback = asyncHandler(
 );
 
 /* ------------------------------------------------------------------ */
-/* 3. Disconnect Google Account                                        */
+/* 3. DISCONNECT active Gmail                                         */
 /* ------------------------------------------------------------------ */
 export const disconnectGoogleAccount = asyncHandler(
   async (req: FastifyRequest, reply: FastifyReply) => {
-    if (!req.userId) {
-      return reply.status(401).send({ error: 'Unauthorized' });
+    if (!req.userId) return reply.code(401).send({ error: 'Unauthorized' });
+
+    /* 1. load active account id */
+    const user = await prisma.user.findUnique({
+      where: { id: req.userId },
+      select: { activeGoogleAccountId: true },
+    });
+    if (!user?.activeGoogleAccountId) {
+      return reply.send({ message: 'No Gmail connected.' });
     }
 
-    try {
-      // TODO: optionally call google.oauth2.revokeToken(refresh_token)
-      await prisma.user.update({
-        where: { id: req.userId },
-        data: {
-          isGmailConnected: false,
-          googleEmail: null,
-          googleAccessToken: null,
-          googleRefreshToken: null,
-          googleTokenExpiry: null,
-          googleScopes: [],
+    /* 2. revoke token (best effort) */
+    const { refreshToken } = await prisma.googleAccount.findUniqueOrThrow({
+      where: { id: user.activeGoogleAccountId },
+      select: { refreshToken: true },
+    });
+    if (refreshToken) {
+      await fetch(
+        'https://oauth2.googleapis.com/revoke',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `token=${encodeURIComponent(refreshToken)}`,
         },
-      });
-
-      reply.send({ message: 'Google account disconnected successfully.' });
-    } catch (error: any) {
-      console.error('[OAuthController] Disconnect error:', error);
-      reply
-        .status(500)
-        .send({ error: 'Failed to disconnect Google account.' });
+      ).catch(() => {});
     }
+
+    /* 3. clear tokens + unset active id (do NOT delete row) */
+    await prisma.googleAccount.update({
+      where: { id: user.activeGoogleAccountId },
+      data: {
+        accessToken: null,
+        refreshToken: undefined,
+        tokenExpiry: null,
+        /* (optional) isRevoked: true */
+      },
+    });
+    await prisma.user.update({
+      where: { id: req.userId },
+      data: { activeGoogleAccountId: null },
+    });
+
+    reply.send({ message: 'Google account disconnected.' });
   },
 );

@@ -3,57 +3,56 @@ import prisma from '../db/prisma';
 
 import {
   getAuthedGmail,
-  listRecentMessageIds,          
-  getUnsubscribeUrlIfRecent,    
+  listRecentMessageIds,
+  getUnsubscribeUrlIfRecent,
   createTasks,
 } from '../services/google';
 
+import { taskQueue } from '../queue/index';   // BullMQ queue
+
 /**
- * POST /scan → create pending UnsubscribeTask rows
+ * POST /scan → enqueue pending unsubscribe tasks for the active Gmail
  */
 export async function startScan(req: FastifyRequest, reply: FastifyReply) {
   /* ------------------------------------------------------------------ */
-  /* 1.  Auth check                                                     */
+  /* 1. Auth guard                                                      */
   /* ------------------------------------------------------------------ */
   if (!req.userId) {
     return reply.code(401).send({ error: 'Unauthorized.' });
   }
 
   /* ------------------------------------------------------------------ */
-  /* 2.  Load fresh user record                                         */
+  /* 2. Load user + active GoogleAccount                                */
   /* ------------------------------------------------------------------ */
   const user = await prisma.user.findUnique({
     where: { id: req.userId },
-    select: {
-      id: true,
-      isGmailConnected: true,
-      googleRefreshToken: true,
-      googleAccessToken: true,
-      googleTokenExpiry: true,
-    },
+    select: { activeGoogleAccountId: true },
   });
-
-  if (!user?.isGmailConnected || !user.googleRefreshToken) {
-    return reply.code(400).send({ error: 'Google account not connected.' });
+  if (!user?.activeGoogleAccountId) {
+    return reply.code(400).send({ error: 'No Gmail connected.' });
   }
 
-  /* ------------------------------------------------------------------ */
-  /* 3.  Gmail client (refresh if needed)                               */
-  /* ------------------------------------------------------------------ */
-  const gmail = await getAuthedGmail({
-    googleRefreshToken: user.googleRefreshToken,
-    googleAccessToken: user.googleAccessToken,
-    googleTokenExpiry: user.googleTokenExpiry,
+  const ga = await prisma.googleAccount.findUniqueOrThrow({
+    where: { id: user.activeGoogleAccountId },
   });
 
   /* ------------------------------------------------------------------ */
-  /* 4.  List recent message IDs                                        */
+  /* 3. Gmail client (refresh if needed)                                */
+  /* ------------------------------------------------------------------ */
+  const gmail = await getAuthedGmail({
+    googleRefreshToken: ga.refreshToken,
+    googleAccessToken: ga.accessToken,
+    googleTokenExpiry: ga.tokenExpiry,
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* 4. Pull message‑ids with List‑Unsubscribe header (last 30 days)    */
   /* ------------------------------------------------------------------ */
   const ids = await listRecentMessageIds(gmail);
   if (!ids.length) return reply.send({ created: 0 });
 
   /* ------------------------------------------------------------------ */
-  /* 5.  Extract unsubscribe URLs (batched)                             */
+  /* 5. Extract unsubscribe URLs (batched)                              */
   /* ------------------------------------------------------------------ */
   const urls: string[] = [];
   const BATCH = 10;
@@ -65,22 +64,28 @@ export async function startScan(req: FastifyRequest, reply: FastifyReply) {
     );
     urls.push(...(parts.filter(Boolean) as string[]));
   }
-
   if (!urls.length) return reply.send({ created: 0 });
 
   /* ------------------------------------------------------------------ */
-  /* 6.  Insert tasks (dedup via @@unique)                              */
+  /* 6. Insert tasks (dedup via @@unique)                               */
   /* ------------------------------------------------------------------ */
-  const tasks = await createTasks(prisma, user.id, urls);
+  const tasks = await createTasks(prisma, ga.id, urls); // googleAccountId!
 
   /* ------------------------------------------------------------------ */
-  /* 7.  Persist refreshed access‑token                                 */
+  /* 7. Enqueue each new task for the worker                            */
   /* ------------------------------------------------------------------ */
-  await prisma.user.update({
-    where: { id: user.id },
+  for (const t of tasks) {
+    await taskQueue.add('unsubscribe', { id: t.id });
+  }
+
+  /* ------------------------------------------------------------------ */
+  /* 8. Persist refreshed access‑token (getAuthedGmail mutates object)  */
+  /* ------------------------------------------------------------------ */
+  await prisma.googleAccount.update({
+    where: { id: ga.id },
     data: {
-      googleAccessToken: user.googleAccessToken,
-      googleTokenExpiry: user.googleTokenExpiry,
+      accessToken: ga.accessToken,
+      tokenExpiry: ga.tokenExpiry,
     },
   });
 

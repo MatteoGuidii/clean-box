@@ -1,4 +1,5 @@
 import { google, gmail_v1 } from 'googleapis';
+import { taskQueue } from '../queue';
 import type { PrismaClient, UnsubscribeTask } from '@prisma/client';
 
 /* ------------------------------------------------------------------ */
@@ -104,21 +105,21 @@ export async function getUnsubscribeUrlIfRecent(
 /* ------------------------------------------------------------------ */
 export async function createTasks(
   prisma: PrismaClient,
-  userId: string,
+  googleAccountId: string,
   urls: string[],
 ): Promise<UnsubscribeTask[]> {
-  const out: UnsubscribeTask[] = [];
+  const created: UnsubscribeTask[] = [];
   for (const url of urls) {
     try {
-      const t = await prisma.unsubscribeTask.upsert({
-        where: { userId_url: { userId, url } },
+      const task = await prisma.unsubscribeTask.upsert({
+        where: { googleAccountId_url: { googleAccountId, url } }, 
         update: {},
-        create: { userId, url },
+        create: { googleAccountId, url },                        
       });
-      out.push(t);
+      created.push(task);
     } catch {
-      /* duplicate, ignore */
+      /* duplicate – ignore */
     }
   }
-  return out;
+  return created;
 }

@@ -14,38 +14,47 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-
-// Models
 model User {
-  id        String   @id @default(cuid())
-  name      String
-  email     String   @unique
-  password  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id                   String          @id @default(cuid())
+  name                 String
+  email                String          @unique
+  password             String
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
 
-  // Google OAuth fields
-  isGmailConnected  Boolean? @default(false)
-  googleEmail       String?
-  googleAccessToken String?  // Optional: Store short-lived access token
-  googleRefreshToken String?  // Essential: Store long-lived refresh token (**ENCRYPT THIS IN PROD**)
-  googleTokenExpiry DateTime? // Optional: Store expiry date of access token
-  googleScopes      String[] // Optional: Store granted scopes
+  googleAccounts       GoogleAccount[] @relation("UserGoogleAccounts")
+  activeGoogleAccountId String?        @unique
+  activeGoogleAccount  GoogleAccount?  @relation("ActiveGoogleAccount", fields: [activeGoogleAccountId], references: [id], onDelete: SetNull)
+}
 
-  // Relational field: one-to-many
-  tasks      UnsubscribeTask[]
+model GoogleAccount {
+  id           String   @id @default(cuid())
+  userId       String
+  email        String   @unique
+  accessToken  String?
+  refreshToken String
+  tokenExpiry  DateTime?
+  scopes       String[]
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user         User     @relation("UserGoogleAccounts", fields: [userId], references: [id], onDelete: Cascade)
+  activeForUser User?   @relation("ActiveGoogleAccount")
+  tasks        UnsubscribeTask[]
+
+  @@unique([userId, email], name: "userId_email")
 }
 
 model UnsubscribeTask {
-  id         String    @id @default(cuid())
-  userId     String
-  url        String
-  status     String    @default("pending") // e.g. pending, success, failed
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id              String    @id @default(cuid())
+  googleAccountId String
+  url             String
+  status          String    @default("pending")
+  errorMessage    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  // Relation back to the user
-  user       User      @relation(fields: [userId], references: [id])
+  googleAccount   GoogleAccount @relation(fields: [googleAccountId], references: [id], onDelete: Cascade)
 
-   @@unique([userId, url])
+  @@unique([googleAccountId, url])
 }
