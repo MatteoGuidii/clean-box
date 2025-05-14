@@ -48,6 +48,7 @@ model GoogleAccount {
 model UnsubscribeTask {
   id              String    @id @default(cuid())
   googleAccountId String
+  sender          String? 
   url             String
   status          String    @default("pending")
   errorMessage    String?

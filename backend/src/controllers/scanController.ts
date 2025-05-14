@@ -4,16 +4,19 @@ import prisma from '../db/prisma';
 import {
   getAuthedGmail,
   listRecentMessageIds,
-  getUnsubscribeUrlIfRecent,
+  getSenderAndUnsub,  
   createTasks,
+  enqueueNewTasks,    
 } from '../services/google';
 
-import { taskQueue } from '../queue/index';   // BullMQ queue
-
 /**
- * POST /scan → enqueue pending unsubscribe tasks for the active Gmail
+ * POST /scan  → discover recent List‑Unsubscribe links for the
+ * active Gmail and enqueue tasks.
  */
-export async function startScan(req: FastifyRequest, reply: FastifyReply) {
+export async function startScan(
+  req: FastifyRequest,
+  reply: FastifyReply,
+) {
   /* ------------------------------------------------------------------ */
   /* 1. Auth guard                                                      */
   /* ------------------------------------------------------------------ */
@@ -37,7 +40,7 @@ export async function startScan(req: FastifyRequest, reply: FastifyReply) {
   });
 
   /* ------------------------------------------------------------------ */
-  /* 3. Gmail client (refresh if needed)                                */
+  /* 3. Gmail client (auto‑refresh token)                               */
   /* ------------------------------------------------------------------ */
   const gmail = await getAuthedGmail({
     googleRefreshToken: ga.refreshToken,
@@ -46,37 +49,37 @@ export async function startScan(req: FastifyRequest, reply: FastifyReply) {
   });
 
   /* ------------------------------------------------------------------ */
-  /* 4. Pull message‑ids with List‑Unsubscribe header (last 30 days)    */
+  /* 4. List candidate message IDs                                      */
   /* ------------------------------------------------------------------ */
   const ids = await listRecentMessageIds(gmail);
   if (!ids.length) return reply.send({ created: 0 });
 
   /* ------------------------------------------------------------------ */
-  /* 5. Extract unsubscribe URLs (batched)                              */
+  /* 5. Extract { sender, url } in batches                              */
   /* ------------------------------------------------------------------ */
-  const urls: string[] = [];
+  const rows: { sender: string | null; url: string }[] = [];
   const BATCH = 10;
 
   for (let i = 0; i < ids.length; i += BATCH) {
     const slice = ids.slice(i, i + BATCH);
     const parts = await Promise.all(
-      slice.map(id => getUnsubscribeUrlIfRecent(gmail, id)),
+      slice.map(id => getSenderAndUnsub(gmail, id)),
     );
-    urls.push(...(parts.filter(Boolean) as string[]));
+    for (const p of parts) {
+      if (p.url) rows.push({ sender: p.sender, url: p.url });
+    }
   }
-  if (!urls.length) return reply.send({ created: 0 });
+  if (!rows.length) return reply.send({ created: 0 });
 
   /* ------------------------------------------------------------------ */
-  /* 6. Insert tasks (dedup via @@unique)                               */
+  /* 6. Insert tasks (@@unique dedups)                                  */
   /* ------------------------------------------------------------------ */
-  const tasks = await createTasks(prisma, ga.id, urls); // googleAccountId!
+  const tasks = await createTasks(prisma, ga.id, rows);
 
   /* ------------------------------------------------------------------ */
-  /* 7. Enqueue each new task for the worker                            */
+  /* 7. Enqueue new tasks for the worker                                */
   /* ------------------------------------------------------------------ */
-  for (const t of tasks) {
-    await taskQueue.add('unsubscribe', { id: t.id });
-  }
+  await enqueueNewTasks(tasks);
 
   /* ------------------------------------------------------------------ */
   /* 8. Persist refreshed access‑token (getAuthedGmail mutates object)  */

@@ -3,6 +3,7 @@
 
 export interface Task {
   id: string;
+  sender?: string | null; 
   url?: string;
   status: 'pending' | 'success' | 'failed' | 'processing';
   createdAt: string;

@@ -6,6 +6,7 @@ import jwtPlugin from './plugins/jwt';
 import oauthRoutes from './routes/oauthRoutes';
 import userRoutes from './routes/user';
 import scanRoutes from './routes/scanRoutes';
+import statsRoutes from './routes/statsRoutes';
 
 import { errorHandler } from './utils/errorHandler';
 import dotenv from 'dotenv';
@@ -22,7 +23,8 @@ app.register(jwtPlugin);
 /* ─────────── Routes ─────────── */
 app.register(userRoutes, { prefix: '/api/v1/users' });
 app.register(oauthRoutes, { prefix: '/api/v1' });
-app.register(scanRoutes, { prefix: '/api/v1' });  
+app.register(scanRoutes, { prefix: '/api/v1' }); 
+app.register(statsRoutes, { prefix: '/api/v1'}); 
 
 /* ─────────── Error handler ───── */
 app.setErrorHandler(errorHandler);
