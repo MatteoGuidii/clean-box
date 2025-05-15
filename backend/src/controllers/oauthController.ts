@@ -25,7 +25,7 @@ export const initiateGoogleOAuth = asyncHandler(
     if (!req.userId) return reply.code(401).send({ error: 'Login first.' });
 
     const scopes = [
-      'https://www.googleapis.com/auth/gmail.metadata',
+      // 'https://www.googleapis.com/auth/gmail.metadata',
       'https://www.googleapis.com/auth/gmail.readonly',
       'https://www.googleapis.com/auth/userinfo.email',
     ];
@@ -33,7 +33,7 @@ export const initiateGoogleOAuth = asyncHandler(
     const url = oauth2.generateAuthUrl({
       access_type: 'offline',
       prompt: 'consent',
-      include_granted_scopes: true,
+      // include_granted_scopes: true,
       scope: scopes,
       state: String(req.userId),            // CSRF tie‑back
     });

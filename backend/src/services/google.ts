@@ -1,21 +1,36 @@
-/* ------------------------------------------------------------------ */
-/*  Google utilities – unsubscribe pipeline                           */
-/* ------------------------------------------------------------------ */
+// -----------------------------------------------------------------------------
+// google.ts — Gmail unsubscribe pipeline for Clean Box (web‑app)
+// -----------------------------------------------------------------------------
+//  This file is **compile‑clean** with the final Prisma schema:
+//     Sender            (@@unique domain)
+//     Subscription      (@@unique googleAccountId, baseUrl)
+//     UnsubscribeTask   (@@unique subscriptionId, fullUrl)
+//
+//  Changes in this revision
+//  • Fixed TypeScript error in `parseUnsubHeader` by returning a flat array.
+//  • Added explicit unique‑constraint names expected by saveToDb (be sure your
+//    schema has `name:` on both @@unique lines).
+//  • Minor type tweaks to satisfy strict mode.
+// -----------------------------------------------------------------------------
 
 import { google, gmail_v1 } from 'googleapis';
+import addressparser from 'nodemailer/lib/addressparser';
 import type { PrismaClient, UnsubscribeTask } from '@prisma/client';
+import pLimit from 'p-limit';
+import { taskQueue } from '../queue';
 
 /* ------------------------------------------------------------------ */
-/*  Configuration                                                     */
+/*  Config                                                            */
 /* ------------------------------------------------------------------ */
 
-// How far back to inspect messages
 const LOOKBACK_DAYS = 30;
-const LOOKBACK_MS = LOOKBACK_DAYS * 24 * 60 * 60 * 1_000;
+const LOOKBACK_MS   = LOOKBACK_DAYS * 24 * 60 * 60 * 1_000;
+const CONCURRENCY   = 20; // Gmail: 250 req / 100 s per user
 
 /* ------------------------------------------------------------------ */
-/*  OAuth helper                                                      */
+/*  OAuth                                                             */
 /* ------------------------------------------------------------------ */
+
 export function getOAuth2Client() {
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -23,10 +38,6 @@ export function getOAuth2Client() {
   );
 }
 
-/**
- * Ensure we have a valid access‑token for the given GoogleAccount row –
- * refresh if necessary – and return an authed Gmail client.
- */
 export async function getAuthedGmail(user: {
   googleRefreshToken: string;
   googleAccessToken?: string | null;
@@ -39,123 +50,190 @@ export async function getAuthedGmail(user: {
     expiry_date: user.googleTokenExpiry?.valueOf(),
   });
 
-  // refresh if missing or < 2‑min left
-  if (
-    !user.googleAccessToken ||
-    (user.googleTokenExpiry &&
-      Date.now() > user.googleTokenExpiry.getTime() - 120_000)
-  ) {
+  if (!user.googleAccessToken ||
+      (user.googleTokenExpiry && Date.now() > user.googleTokenExpiry.getTime() - 120_000)) {
     const { credentials } = await oauth2.refreshAccessToken();
     user.googleAccessToken = credentials.access_token ?? null;
-    user.googleTokenExpiry = credentials.expiry_date
-      ? new Date(credentials.expiry_date)
-      : null;
+    user.googleTokenExpiry = credentials.expiry_date ? new Date(credentials.expiry_date) : null;
   }
-
   return google.gmail({ version: 'v1', auth: oauth2 });
 }
 
 /* ------------------------------------------------------------------ */
-/*  1. List candidate message IDs                                     */
+/*  Types & helpers                                                   */
 /* ------------------------------------------------------------------ */
-export async function listRecentMessageIds(
-  gmail: gmail_v1.Gmail,
-): Promise<string[]> {
-  const res = await gmail.users.messages.list({
-    userId: 'me',
-    // Just Inbox + Promotions to cut noise
-    labelIds: ['INBOX', 'CATEGORY_PROMOTIONS'],
-    maxResults: 500,
-  });
 
-  return (res.data.messages ?? []).map(m => m.id!).filter(Boolean);
+export interface UnsubChannel {
+  type: 'https' | 'mailto';
+  url: string;
+  usesOneClick?: boolean;
 }
 
-/* ------------------------------------------------------------------ */
-/*  2. Fetch { sender, url } if message is fresh & has header          */
-/* ------------------------------------------------------------------ */
-export async function getSenderAndUnsub(
-  gmail: gmail_v1.Gmail,
-  messageId: string,
-): Promise<{ sender: string | null; url: string | null }> {
-  const msg = await gmail.users.messages.get({
-    userId: 'me',
-    id: messageId,
-    format: 'metadata',
-    metadataHeaders: ['From', 'List-Unsubscribe', 'Date'],
-  });
-
-  /* ----- age filter ------------------------------------------------ */
-
-  // Prefer internalDate; fallback to Date header
-  const internalTs = msg.data.internalDate ? Number(msg.data.internalDate) : NaN;
-  let sentTs = internalTs;
-  if (Number.isNaN(sentTs)) {
-    const dateHdr = msg.data.payload?.headers?.find(h => h.name === 'Date')
-      ?.value;
-    sentTs = dateHdr ? Date.parse(dateHdr) : 0;
+export function canonicalUrl(raw: string): string {
+  if (raw.startsWith('mailto:')) {
+    return `mailto:${raw.slice(7).split('?')[0]}`;
   }
-  if (Date.now() - sentTs > LOOKBACK_MS) {
-    return { sender: null, url: null };
-  }
-
-  /* ----- sender (pretty name) ------------------------------------- */
-
-  const fromHdr = msg.data.payload?.headers?.find(h => h.name === 'From')?.value;
-  const sender =
-    fromHdr?.match(/"?([^"]+)"?\s*</)?.[1] ?? // "Product Hunt Weekly" <…>
-    fromHdr?.split('<')[0].trim() ??
-    null;
-
-  /* ----- unsubscribe header --------------------------------------- */
-
-  const lu = msg.data.payload?.headers?.find(
-    h => h.name?.toLowerCase() === 'list-unsubscribe',
-  )?.value;
-  if (!lu) return { sender, url: null };
-
-  const urlMatch = lu.match(/<([^>]+)>/);
-  const url = urlMatch ? urlMatch[1] : lu.split(',')[0].trim();
-
-  return { sender, url };
+  return new URL(raw).origin;
 }
 
-/* ------------------------------------------------------------------ */
-/*  3. Bulk‑insert tasks (skip duplicates)                             */
-/* ------------------------------------------------------------------ */
-export async function createTasks(
-  prisma: PrismaClient,
-  googleAccountId: string,
-  rows: { sender: string | null; url: string }[],
-): Promise<UnsubscribeTask[]> {
-  const created: UnsubscribeTask[] = [];
+function parseUnsubHeader(lu: string, luPost?: string): UnsubChannel[] {
+  const channels: UnsubChannel[] = [];
+  if (!lu) return channels;
 
-  for (const { sender, url } of rows) {
-    try {
-      const task = await prisma.unsubscribeTask.upsert({
-        where: { googleAccountId_url: { googleAccountId, url } },
-        update: { sender }, // store / refresh sender name
-        create: { googleAccountId, sender, url },
-      });
-      created.push(task);
-    } catch {
-      // duplicate – ignore
+  const oneClick = /one-click/i.test(luPost ?? '');
+  for (const token of lu.split(',')) {
+    const val = token.trim().replace(/^<|>$/g, '');
+    if (!val) continue;
+    if (/^http/i.test(val)) {
+      channels.push({ type: 'https', url: val, usesOneClick: oneClick });
+    } else if (/^mailto:/i.test(val)) {
+      channels.push({ type: 'mailto', url: val });
     }
   }
+  return channels;
+}
 
-  return created;
+function extractDisplayName(fromHdr?: string): string | null {
+  if (!fromHdr) return null;
+  try {
+    return addressparser(fromHdr)?.[0]?.name ?? null;
+  } catch {
+    return fromHdr.split('<')[0].trim();
+  }
 }
 
 /* ------------------------------------------------------------------ */
-/*  4. Helper: enqueue new tasks                                       */
+/*  1 ▸ Message ID list                                               */
 /* ------------------------------------------------------------------ */
-import { taskQueue } from '../queue';
 
-/**
- * Push every freshly‑created task into BullMQ for background processing.
- */
+export async function listRecentMessageIds(gmail: gmail_v1.Gmail): Promise<string[]> {
+  const ids: string[] = [];
+  let pageToken: string | undefined;
+  do {
+    const res = await gmail.users.messages.list({
+      userId: 'me',
+      q: `newer_than:${LOOKBACK_DAYS}d in:anywhere`,
+      labelIds: ['INBOX', 'CATEGORY_PROMOTIONS'],
+      maxResults: 500,
+      pageToken,
+      fields: 'messages/id,nextPageToken',
+    });
+    ids.push(...(res.data.messages ?? []).map(m => m.id!));
+    pageToken = res.data.nextPageToken ?? undefined;
+  } while (pageToken);
+  return ids;
+}
+
+/* ------------------------------------------------------------------ */
+/*  2 ▸ Extract sender + channels per message                          */
+/* ------------------------------------------------------------------ */
+
+export async function getSenderAndUnsub(gmail: gmail_v1.Gmail, id: string) {
+  const msg = await gmail.users.messages.get({
+    userId: 'me',
+    id,
+    format: 'metadata',
+    metadataHeaders: ['From', 'List-Unsubscribe', 'List-Unsubscribe-Post', 'Date'],
+    fields: 'internalDate,payload/headers',
+  });
+
+  const sentTs = msg.data.internalDate ? Number(msg.data.internalDate) : 0;
+  if (Date.now() - sentTs > LOOKBACK_MS) return null;
+
+  const headers = msg.data.payload!.headers!;
+  const byName = (n: string) => headers.find(h => h.name!.toLowerCase() === n)?.value;
+
+  const senderName = extractDisplayName(byName('from') ?? undefined);
+  const channels   = parseUnsubHeader(byName('list-unsubscribe') ?? '', byName('list-unsubscribe-post') ?? '');
+  if (!channels.length) return null;
+
+  return { senderName, channels } as const;
+}
+
+/* ------------------------------------------------------------------ */
+/*  3 ▸ Persist + enqueue                                             */
+/* ------------------------------------------------------------------ */
+
+export async function saveToDb(
+  prisma: PrismaClient,
+  googleAccountId: string,
+  records: { senderName: string | null; channels: UnsubChannel[] }[],
+): Promise<UnsubscribeTask[]> {
+
+  const tasks: UnsubscribeTask[] = [];
+
+  for (const rec of records) {
+    const { senderName, channels } = rec;
+
+    for (const ch of channels) {
+      const canonical = canonicalUrl(ch.url);
+      const domain =
+        ch.type === 'mailto'
+          ? canonical.slice(7).split('@')[1]
+          : new URL(ch.url).hostname;
+
+      const task = await prisma.$transaction(async tx => {
+        /* 1 ▸ upsert the sender ----------------------------------- */
+        const sender = await tx.sender.upsert({
+          where: { domain },
+          update: senderName ? { displayName: senderName } : {},
+          create: { domain, displayName: senderName ?? undefined },
+        });
+
+        /* 2 ▸ upsert / touch subscription ------------------------- */
+        const subscription = await tx.subscription.upsert({
+          where: { googleAccountId_baseUrl: { googleAccountId, baseUrl: canonical } },
+          update: { lastSeen: new Date() },
+          create: {
+            senderId: sender.id,
+            googleAccountId,
+            baseUrl: canonical,
+            lastSeen: new Date(),
+          },
+        });
+
+        /* 3 ▸ already unsubscribed? bail out ---------------------- */
+        if (subscription.isUnsubscribed) return null;
+
+        /* 4 ▸ otherwise create / reuse task ----------------------- */
+        return tx.unsubscribeTask.upsert({
+          where: { subscriptionId_fullUrl: { subscriptionId: subscription.id, fullUrl: ch.url } },
+          update: {},
+          create: { subscriptionId: subscription.id, fullUrl: ch.url },
+        });
+      });
+
+      if (task) tasks.push(task);          // null ⇒ skipped
+    }
+  }
+  return tasks;
+}
+
 export async function enqueueNewTasks(tasks: UnsubscribeTask[]) {
   for (const t of tasks) {
     await taskQueue.add('unsubscribe', { id: t.id });
   }
+}
+
+/* ------------------------------------------------------------------ */
+/*  4 ▸ Convenience orchestrator                                      */
+/* ------------------------------------------------------------------ */
+
+export async function scanAndQueue(
+  prisma: PrismaClient,
+  googleAccountId: string,
+  gmail: gmail_v1.Gmail,
+): Promise<number> {
+  const ids = await listRecentMessageIds(gmail);
+  if (!ids.length) return 0;
+
+  const limit = pLimit(CONCURRENCY);
+  const meta = (await Promise.all(ids.map(mId => limit(() => getSenderAndUnsub(gmail, mId)))))
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+
+  if (!meta.length) return 0;
+
+  const tasks = await saveToDb(prisma, googleAccountId, meta);
+  await enqueueNewTasks(tasks);
+  return tasks.length;
 }
